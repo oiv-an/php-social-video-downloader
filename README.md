@@ -24,14 +24,26 @@ sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o
 sudo chmod a+rx /usr/local/bin/yt-dlp
 ```
 
+#### TikTok: обновление до nightly (рекомендуется)
+TikTok регулярно меняет API/хосты, поэтому для скачивания **без водяного знака** рекомендуется nightly сборка:
+```bash
+sudo yt-dlp --update-to nightly
+yt-dlp --version
+```
+
 ### 3. Настройка проекта
 1. Склонируйте репозиторий или скачайте файлы.
 2. Создайте файл `config.php` в корне проекта (см. `config.example.php`).
 3. Укажите ваш секретный ключ в `config.php`.
-4. **Для YouTube/Instagram**: Если вы получаете ошибку "Sign in to confirm you're not a bot", необходимо использовать Cookies.
+4. **TikTok (без водяного знака):** параметры берутся из конфига и применяются в [`index.php`](index.php:1) для mobile API:
+   - `tiktok_api_hostname` (например `api22-normal-c-useast2a.tiktokv.com`)
+   - `tiktok_user_agent` (Android user-agent)
+   - `tiktok_sleep_requests`, `tiktok_sleep_interval` (анти-бан/рейтконтроль)
+   - `tiktok_embed_metadata` (опционально, добавляет `--embed-metadata`)
+5. **Для YouTube/Instagram**: Если вы получаете ошибку "Sign in to confirm you're not a bot", необходимо использовать Cookies.
    - Экспортируйте куки из браузера в формате Netscape (используйте расширение Cookie-Editor).
    - Сохраните их в файл (например, `cookies.txt`) и укажите путь к нему в `config.php` (`cookies_path`).
-5. Убедитесь, что у PHP есть права на запись во временную папку системы (`/tmp`).
+6. Убедитесь, что у PHP есть права на запись во временную папку системы (`/tmp`).
 
 ---
 
