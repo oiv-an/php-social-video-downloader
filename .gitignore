@@ -1,0 +1,9 @@
+.idea/
+composer.lock
+config.php
+*.mp4
+tiktok_*
+youtube_*
+instagram_*
+vk_*
+rutube_*
