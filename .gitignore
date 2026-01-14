@@ -1,6 +1,7 @@
 .idea/
 composer.lock
 config.php
+vendor/
 *.mp4
 tiktok_*
 youtube_*
