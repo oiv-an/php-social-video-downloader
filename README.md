@@ -73,13 +73,23 @@ yt-dlp --version
 **Параметры (JSON или Form-data):**
 - `url`: Ссылка на видео.
 - `key`: Ваш секретный ключ доступа.
+- `mode`: Режим скачивания: `video` (по умолчанию) или `audio` (только аудио).
 
-**Пример запроса (curl):**
+**Пример запроса (curl) — видео:**
 ```bash
 curl -X POST https://your-domain.com/index.php \
      -H "Content-Type: application/json" \
-     -d '{"url": "https://www.tiktok.com/@user/video/123", "key": "your_key_here"}'
+     -d '{"url": "https://www.tiktok.com/@user/video/123", "key": "your_key_here", "mode": "video"}'
 ```
+
+**Пример запроса (curl) — только аудио (mp3):**
+```bash
+curl -X POST https://your-domain.com/index.php \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://www.tiktok.com/@user/video/123", "key": "your_key_here", "mode": "audio"}'
+```
+
+> Примечание: режим `audio` использует postprocessing `yt-dlp` и требует установленный `ffmpeg` на сервере.
 
 ---
 

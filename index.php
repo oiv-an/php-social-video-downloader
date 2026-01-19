@@ -112,6 +112,7 @@ if (empty($input)) {
 
 $url = $input['url'] ?? '';
 $key = $input['key'] ?? '';
+$mode = $input['mode'] ?? 'video'; // video|audio
 
 if ($key !== $secretKey) {
     header('Content-Type: application/json');
@@ -124,6 +125,13 @@ if (empty($url)) {
     header('Content-Type: application/json');
     http_response_code(400);
     echo json_encode(['error' => 'URL required']);
+    exit;
+}
+
+if (!in_array($mode, ['video', 'audio'], true)) {
+    header('Content-Type: application/json');
+    http_response_code(400);
+    echo json_encode(['error' => 'Invalid mode. Use video or audio.']);
     exit;
 }
 
@@ -154,12 +162,22 @@ try {
     $downloadUrl = $url;
     $ytDlpArgs = [
         "--no-playlist",
-        "--format \"best\"",
         "--no-check-certificate",
         "--no-cache-dir",
         "--socket-timeout 30",
         "--retries 3",
     ];
+
+    // Режим: video (по умолчанию) или audio (только аудио)
+    if ($mode === 'audio') {
+        // Извлекаем аудио и конвертируем в mp3 (требует ffmpeg)
+        $ytDlpArgs[] = "--extract-audio";
+        $ytDlpArgs[] = "--audio-format mp3";
+        $ytDlpArgs[] = "--audio-quality 0";
+        $ytDlpArgs[] = "--format \"bestaudio/best\"";
+    } else {
+        $ytDlpArgs[] = "--format \"best\"";
+    }
 
     // Настройки из конфига
     if (!empty($config['proxy'])) {
@@ -263,7 +281,8 @@ try {
         $ytDlpArgs[] = $config['extra_args'][$platform];
     }
 
-    $fileName = uniqid($platform . '_', true) . '.mp4';
+    $ext = ($mode === 'audio') ? 'mp3' : 'mp4';
+    $fileName = uniqid($platform . '_', true) . '.' . $ext;
     $filePath = $tempDir . DIRECTORY_SEPARATOR . $fileName;
 
     $command = escapeshellarg($ytDlpPath) . " " . implode(" ", $ytDlpArgs) . " -o " . escapeshellarg($filePath) . " " . escapeshellarg($downloadUrl) . " 2>&1";
@@ -346,7 +365,11 @@ try {
         ob_end_clean();
     }
     
-    header('Content-Type: video/mp4');
+    if ($mode === 'audio') {
+        header('Content-Type: audio/mpeg');
+    } else {
+        header('Content-Type: video/mp4');
+    }
     header('Content-Disposition: attachment; filename="' . $fileName . '"');
     header('Content-Length: ' . filesize($filePath));
     header('Cache-Control: no-cache, must-revalidate');
