@@ -74,12 +74,28 @@ yt-dlp --version
 - `url`: Ссылка на видео.
 - `key`: Ваш секретный ключ доступа.
 - `mode`: Режим скачивания: `video` (по умолчанию) или `audio` (только аудио).
+- `audio_bitrate`: (опционально) битрейт MP3, например `128k`, `192k`, `320k` (по умолчанию `128k`).
+- `debug`: (опционально) `1` — вернуть JSON-диагностику вместо файла (только для `mode=audio`).
 
 **Пример запроса (curl) — видео:**
 ```bash
 curl -X POST https://your-domain.com/index.php \
      -H "Content-Type: application/json" \
      -d '{"url": "https://www.tiktok.com/@user/video/123", "key": "your_key_here", "mode": "video"}'
+```
+
+**Пример запроса (curl) — MP3 (audio):**
+```bash
+curl -X POST https://your-domain.com/index.php \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://www.tiktok.com/@user/video/123", "key": "your_key_here", "mode": "audio", "audio_bitrate": "128k"}'
+```
+
+**Пример запроса (curl) — MP3 debug (вернуть JSON):**
+```bash
+curl -X POST https://your-domain.com/index.php \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://www.tiktok.com/@user/video/123", "key": "your_key_here", "mode": "audio", "debug": "1"}'
 ```
 
 **Пример запроса (curl) — только аудио (mp3):**

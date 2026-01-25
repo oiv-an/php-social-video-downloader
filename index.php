@@ -171,9 +171,20 @@ try {
     // Режим: video (по умолчанию) или audio (только аудио)
     if ($mode === 'audio') {
         // Извлекаем аудио и конвертируем в mp3 (требует ffmpeg)
+        // Для реального сжатия используем битрейт (по умолчанию 128k).
+        $audioBitrate = $input['audio_bitrate'] ?? ($config['audio_bitrate'] ?? '128k');
+        if (!preg_match('/^\d{2,3}k$/', (string)$audioBitrate)) {
+            $audioBitrate = '128k';
+        }
+
         $ytDlpArgs[] = "--extract-audio";
         $ytDlpArgs[] = "--audio-format mp3";
-        $ytDlpArgs[] = "--audio-quality 0";
+
+        // ВАЖНО: --audio-quality в yt-dlp для mp3 не всегда гарантирует CBR.
+        // Поэтому принудительно задаём параметры кодека LAME через ffmpeg.
+        $ytDlpArgs[] = "--postprocessor-args " . escapeshellarg("ffmpeg:-vn -ac 2 -ar 44100 -codec:a libmp3lame -b:a {$audioBitrate}");
+
+        // Берём только аудио дорожку
         $ytDlpArgs[] = "--format \"bestaudio/best\"";
     } else {
         $ytDlpArgs[] = "--format \"best\"";
@@ -285,6 +296,8 @@ try {
     $fileName = uniqid($platform . '_', true) . '.' . $ext;
     $filePath = $tempDir . DIRECTORY_SEPARATOR . $fileName;
 
+    // Оставляем как было (фиксированное имя .mp3/.mp4), чтобы не ломать поведение.
+    // Сжатие обеспечивается параметрами --audio-quality/--postprocessor-args выше.
     $command = escapeshellarg($ytDlpPath) . " " . implode(" ", $ytDlpArgs) . " -o " . escapeshellarg($filePath) . " " . escapeshellarg($downloadUrl) . " 2>&1";
 
     // Явно устанавливаем переменные окружения для exec() чтобы yt-dlp работал как от root
@@ -322,8 +335,42 @@ try {
         } else {
             // TikTok fallback: попробовать альтернативный метод через API
             if ($platform === 'tiktok' && !empty($videoId)) {
-                $fallbackUrl = tryTikTokFallback($videoId, $filePath);
-                if ($fallbackUrl && file_exists($filePath) && filesize($filePath) > 0) {
+                $fallbackOk = tryTikTokFallback($videoId, $filePath);
+
+                // ВАЖНО: fallback скачивает ВИДЕО (mp4). Если запрошен audio — нужно перекодировать в mp3.
+                if ($fallbackOk && file_exists($filePath) && filesize($filePath) > 0) {
+                    if ($mode === 'audio') {
+                        $audioBitrate = $input['audio_bitrate'] ?? ($config['audio_bitrate'] ?? '128k');
+                        if (!preg_match('/^\d{2,3}k$/', (string)$audioBitrate)) {
+                            $audioBitrate = '128k';
+                        }
+
+                        $tmpMp3 = $tempDir . DIRECTORY_SEPARATOR . uniqid('audio_', true) . '.mp3';
+                        $ffmpegCmd = "ffmpeg -y -hide_banner -loglevel error -i " . escapeshellarg($filePath) .
+                            " -vn -ac 2 -ar 44100 -codec:a libmp3lame -b:a {$audioBitrate} " . escapeshellarg($tmpMp3) . " 2>&1";
+                        $ffOut = [];
+                        $ffCode = 0;
+                        @exec($ffmpegCmd, $ffOut, $ffCode);
+
+                        if ($ffCode === 0 && file_exists($tmpMp3) && filesize($tmpMp3) > 0) {
+                            @unlink($filePath);
+                            $filePath = $tmpMp3;
+                            $fileName = preg_replace('/\.mp4$/i', '.mp3', $fileName);
+                        } else {
+                            header('Content-Type: application/json');
+                            http_response_code(500);
+                            echo json_encode([
+                                'error' => 'Download failed (fallback video ok, but mp3 transcode failed)',
+                                'details' => $output,
+                                'platform' => $platform,
+                                'debug_command' => $command,
+                                'ffmpeg_cmd' => $ffmpegCmd,
+                                'ffmpeg_output' => $ffOut,
+                                'ffmpeg_return_code' => $ffCode,
+                            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                            exit;
+                        }
+                    }
                     // Fallback сработал, продолжаем
                 } else {
                     header('Content-Type: application/json');
@@ -333,7 +380,7 @@ try {
                         'details' => $output,
                         'platform' => $platform,
                         'debug_command' => $command
-                    ]);
+                    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                     exit;
                 }
             } else {
@@ -344,7 +391,7 @@ try {
                     'details' => $output,
                     'platform' => $platform,
                     'debug_command' => $command
-                ]);
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                 exit;
             }
         }
@@ -357,25 +404,109 @@ try {
         exit;
     }
 
+    // ВРЕМЕННО: вместо отдачи файла возвращаем JSON с подробностями (только если debug=1)
+    $debug = (string)($input['debug'] ?? '') === '1';
+    if ($mode === 'audio' && $debug) {
+        $size = @filesize($filePath);
+        $mime = null;
+        if (function_exists('finfo_open')) {
+            $finfo = @finfo_open(FILEINFO_MIME_TYPE);
+            if ($finfo) {
+                $mime = @finfo_file($finfo, $filePath) ?: null;
+                @finfo_close($finfo);
+            }
+        }
+
+        $headHex = null;
+        $headAscii = null;
+        $fp = @fopen($filePath, 'rb');
+        if ($fp) {
+            $head = @fread($fp, 64);
+            @fclose($fp);
+            if ($head !== false) {
+                $headHex = bin2hex($head);
+                $headAscii = preg_replace('/[^\x20-\x7E]/', '.', $head);
+            }
+        }
+
+        // Попробуем получить реальный битрейт/кодек через ffprobe (если доступен)
+        $ffprobeInfo = null;
+        $ffprobeCmd = "ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,codec_type,bit_rate,sample_rate,channels,duration -of json " . escapeshellarg($filePath) . " 2>&1";
+        $ffprobeOut = [];
+        $ffprobeCode = 0;
+        @exec($ffprobeCmd, $ffprobeOut, $ffprobeCode);
+        if ($ffprobeCode === 0 && !empty($ffprobeOut)) {
+            $ffprobeInfo = json_decode(implode("\n", $ffprobeOut), true);
+        }
+
+        // Очищаем все буферы вывода, чтобы не ломать JSON
+        while (ob_get_level()) {
+            ob_end_clean();
+        }
+
+        header('Content-Type: application/json; charset=utf-8');
+
+        $payload = [
+            'mode' => $mode,
+            'platform' => $platform,
+            'download_url' => $downloadUrl,
+            'file_name' => $fileName,
+            'file_path' => $filePath,
+            'file_exists' => true,
+            'file_size_bytes' => $size,
+            'file_size_mb' => $size ? round($size / 1024 / 1024, 2) : null,
+            'mime' => $mime,
+            'head_hex_64' => $headHex,
+            'head_ascii_64' => $headAscii,
+            'yt_dlp_command' => $command,
+            'yt_dlp_return_code' => $returnCode,
+            'yt_dlp_output' => $output,
+            'ffprobe_cmd' => $ffprobeCmd,
+            'ffprobe_return_code' => $ffprobeCode,
+            'ffprobe_raw' => $ffprobeOut,
+            'ffprobe_json' => $ffprobeInfo,
+        ];
+
+        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            // Фоллбек: если в выводе есть невалидные байты, чистим их и кодируем снова
+            $payload['json_encode_error'] = json_last_error_msg();
+            $payload['yt_dlp_output'] = array_map(static function ($line) {
+                return is_string($line) ? mb_convert_encoding($line, 'UTF-8', 'UTF-8') : $line;
+            }, $payload['yt_dlp_output'] ?? []);
+            $payload['ffprobe_raw'] = array_map(static function ($line) {
+                return is_string($line) ? mb_convert_encoding($line, 'UTF-8', 'UTF-8') : $line;
+            }, $payload['ffprobe_raw'] ?? []);
+            $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+
+        echo $json !== false ? $json : '{"error":"Failed to encode JSON","details":"' . addslashes(json_last_error_msg()) . '"}';
+
+        // Удаляем файл после диагностики
+        @unlink($filePath);
+        exit;
+    }
+
     // Отправка файла
     $fileSuccessfullySent = true; // Отключаем автоудаление
-    
+
     // Очищаем все буферы вывода
     while (ob_get_level()) {
         ob_end_clean();
     }
-    
+
     if ($mode === 'audio') {
         header('Content-Type: audio/mpeg');
     } else {
         header('Content-Type: video/mp4');
     }
+
     header('Content-Disposition: attachment; filename="' . $fileName . '"');
     header('Content-Length: ' . filesize($filePath));
     header('Cache-Control: no-cache, must-revalidate');
     header('Pragma: public');
     header('Expires: 0');
-    
+
     // Отправляем файл по частям для надежности
     $fp = fopen($filePath, 'rb');
     if ($fp) {
@@ -385,7 +516,7 @@ try {
         }
         fclose($fp);
     }
-    
+
     // Удаляем файл после успешной отправки
     @unlink($filePath);
     exit;
